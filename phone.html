@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Pong · Player __PLAYER__</title>
+<style>body{background:#0a0f1b;color:#ebf1ff;font:20px system-ui;text-align:center;margin:0;padding:36px 20px}main{max-width:440px;margin:auto}h1{color:#4ae0e2}button{font:inherit;padding:18px;border:0;border-radius:14px;background:#4ae0e2;color:#0a0f1b;width:100%;margin:12px 0}p{line-height:1.6}#status{min-height:80px}small{color:#a2afc6}meter{width:100%;height:28px}</style>
+<main><small>V O I C E / P O N G</small><h1>Player __PLAYER__</h1><p>Hum higher to move up.<br>Hum lower to move down.</p><button id="start">Enable microphone</button><button id="stop" hidden>Stop microphone</button><meter id="level" min="0" max="1" value="0"></meter><p id="status" role="status">Tap Enable microphone, then allow access.</p><small>Keep this page open and your phone awake. Audio goes only to the game computer on your Wi-Fi and is not saved.</small></main>
+<section id="http-help" hidden><h2>HTTP microphone setup</h2><p>This page is connected over local HTTP. Browsers normally block microphone access here.</p><p>In Chrome, if available, open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, add only this game address:</p><p><code id="origin"></code></p><p>Enable the flag, relaunch Chrome, then reopen this player link. Remove the exception when finished. If your browser has no such setting, phone microphone play requires a trusted secure connection or a native app. You can use the computer microphone by pressing L.</p></section>
+<script>
+const statusEl=document.querySelector('#status'),start=document.querySelector('#start'),stop=document.querySelector('#stop');
+let stream,ctx,source,analyser,timer,generation=0;
+const token=new URLSearchParams(location.search).get('token');
+document.querySelector('#origin').textContent=location.origin;
+if(!navigator.mediaDevices?.getUserMedia){document.querySelector('#http-help').hidden=false;statusEl.textContent='Page connected. Your browser blocks microphone access on HTTP; see setup below.';}
+function shutdown(){generation++;clearTimeout(timer);if(stream)stream.getTracks().forEach(t=>t.stop());if(ctx)ctx.close();stream=ctx=null;start.disabled=false;start.hidden=false;stop.hidden=true;document.querySelector('#level').value=0;}
+stop.onclick=()=>{shutdown();statusEl.textContent='Microphone stopped. Tap Enable microphone to reconnect.'};
+start.onclick=async()=>{
+ start.disabled=true;
+ try{
+  if(!navigator.mediaDevices?.getUserMedia)throw Error('This browser blocks microphone access on local HTTP. See the setup instructions below, or press L on the computer to use its microphone.');
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  ctx=new AudioContext();await ctx.resume();source=ctx.createMediaStreamSource(stream);analyser=ctx.createAnalyser();analyser.fftSize=1024;source.connect(analyser);
+  start.hidden=true;stop.hidden=false;const current=++generation;
+  stream.getAudioTracks()[0].onended=()=>stop.click();
+  async function tick(){
+   if(current!==generation)return;
+   try{
+    if(ctx.state!=='running'){await ctx.resume();}
+    const samples=new Float32Array(1024);analyser.getFloatTimeDomainData(samples);
+    document.querySelector('#level').value=Math.min(1,Math.sqrt(samples.reduce((a,v)=>a+v*v,0)/samples.length)*12);
+    const res=await fetch('/audio?token='+token+'&rate='+ctx.sampleRate,{method:'POST',body:samples.buffer,signal:AbortSignal.timeout(2500)});if(!res.ok)throw Error('Connection rejected. Scan the current player QR code.');
+    const state=await fetch('/status?token='+token,{signal:AbortSignal.timeout(2500)}).then(r=>r.json());
+    if(current!==generation)return;
+    statusEl.textContent=state.paused?'Connected — waiting for both players or game paused.':state.active?'Your turn! Hum or sing.':'Connected — other player’s turn.';
+   }catch(e){if(current===generation)statusEl.textContent='Connection lost. Keep this page open; retrying… '+e.message;}
+   if(current===generation)timer=setTimeout(tick,16);
+  }tick();
+ }catch(e){shutdown();statusEl.textContent=e.name==='NotAllowedError'?'Microphone blocked. Allow it in browser site settings, then try again.':e.message;}
+};
+window.addEventListener('pagehide',shutdown);
+</script></html>
